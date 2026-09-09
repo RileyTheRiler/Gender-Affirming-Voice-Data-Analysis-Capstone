@@ -10,6 +10,7 @@ const els = {
   pitchBounds: $('pitchBounds'), resonanceBounds: $('resonanceBounds'), rangeBounds: $('rangeBounds'), brightnessBounds: $('brightnessBounds')
 };
 
+const TARGET_SAMPLE_RATE = 24000;
 let recorder = null;
 let stream = null;
 let chunks = [];
@@ -108,18 +109,37 @@ function encodeWav(samples, sampleRate) {
   return new Blob([buffer], { type: 'audio/wav' });
 }
 
+async function downmixAndResample(audioBuffer, targetRate = TARGET_SAMPLE_RATE) {
+  const sourceFrames = audioBuffer.length;
+  const sourceMono = new Float32Array(sourceFrames);
+  for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
+    const data = audioBuffer.getChannelData(ch);
+    for (let i = 0; i < sourceFrames; i++) sourceMono[i] += data[i] / audioBuffer.numberOfChannels;
+  }
+
+  if (audioBuffer.sampleRate === targetRate) return sourceMono;
+
+  const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if (!OfflineCtx) throw new Error('This browser cannot resample audio safely. Try current Chrome.');
+  const outputFrames = Math.max(1, Math.ceil(audioBuffer.duration * targetRate));
+  const offline = new OfflineCtx(1, outputFrames, targetRate);
+  const sourceBuffer = offline.createBuffer(1, sourceFrames, audioBuffer.sampleRate);
+  sourceBuffer.copyToChannel(sourceMono, 0);
+  const node = offline.createBufferSource();
+  node.buffer = sourceBuffer;
+  node.connect(offline.destination);
+  node.start(0);
+  const rendered = await offline.startRendering();
+  return new Float32Array(rendered.getChannelData(0));
+}
+
 async function audioBlobToWav(blob) {
   const ctx = new (window.AudioContext || window.webkitAudioContext)();
   try {
     const audioBuffer = await ctx.decodeAudioData(await blob.arrayBuffer());
-    const frames = audioBuffer.length;
-    const mono = new Float32Array(frames);
-    for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
-      const data = audioBuffer.getChannelData(ch);
-      for (let i = 0; i < frames; i++) mono[i] += data[i] / audioBuffer.numberOfChannels;
-    }
     if (audioBuffer.duration > 15.25) throw new Error('Recording must be 15 seconds or shorter.');
-    return encodeWav(mono, audioBuffer.sampleRate);
+    const mono24k = await downmixAndResample(audioBuffer, TARGET_SAMPLE_RATE);
+    return encodeWav(mono24k, TARGET_SAMPLE_RATE);
   } finally { await ctx.close(); }
 }
 
@@ -130,7 +150,7 @@ function setBaseline(wavBlob, label='Baseline ready.') {
   els.baselineAudio.src = baselineUrl;
   els.generateBtn.disabled = false;
   els.playOriginal.disabled = false;
-  els.recordStatus.textContent = label;
+  els.recordStatus.textContent = `${label} Converted to mono 24 kHz for upload.`;
   els.generateStatus.textContent = 'Adjust the sliders, then generate a modified version.';
   clearModified();
 }
