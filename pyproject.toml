@@ -7,3 +7,25 @@ dependencies = [
   "numpy>=2.0,<3",
   "praat-parselmouth>=0.4.7,<0.5"
 ]
+
+[project.optional-dependencies]
+# WORLD-vocoder backend. Kept optional because pyworld ships as an sdist and needs
+# a C++ toolchain to build; the API falls back to the Praat path when it is absent.
+#
+# setuptools is a real runtime requirement here, not a build one, and it has to be
+# an old one: pyworld 0.3.5 calls pkg_resources.get_distribution() at import time.
+# Python 3.12 no longer ships setuptools at all, and setuptools removed
+# pkg_resources in 82.0.0 (present through 81.0.0, gone in 82.0.0). Either way
+# pyworld compiles and installs cleanly and is then unimportable, which is a far
+# more confusing failure than not building.
+#
+# The pin is a maintenance liability and an argument against adopting pyworld
+# permanently: it holds an unrelated build tool back for the sake of one package's
+# import line. See docs/WORLD_SPIKE.md.
+world = ["pyworld>=0.3.4,<0.4", "setuptools>=68,<82"]
+
+[tool.setuptools]
+# `bench/` is a development harness, not part of the deployed function. Without an
+# explicit list, setuptools' flat-layout discovery sees two top-level packages and
+# refuses to build at all.
+packages = ["api"]

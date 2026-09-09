@@ -16,5 +16,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install . pytest
+      - name: Install optional WORLD backend
+        run: python -m pip install '.[world]'
+      - name: Verify the WORLD backend actually imports
+        # The WORLD tests skip themselves when pyworld is unavailable, so without
+        # this check a broken backend leaves the suite green with 21 silent skips.
+        # That is exactly what happened when pyworld built but could not import.
+        run: |
+          python -c "
+          from api import world_backend as wb
+          assert wb.world_available(), f'WORLD backend unavailable: {wb.world_import_error()}'
+          print('WORLD backend importable')
+          "
       - name: Run tests
         run: python -m pytest -q
