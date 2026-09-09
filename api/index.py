@@ -4,20 +4,18 @@ import base64
 import io
 import math
 import wave
-from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 import parselmouth
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from parselmouth.praat import call
 
 app = FastAPI(title="Voice Target Lab API")
 
 MAX_SECONDS = 15.0
-ROOT = Path(__file__).resolve().parents[1]
+MAX_WAV_BASE64_CHARS = 1_100_000
 
 # Vocal-weight tilt: pivot frequency and how far from it the full amount is reached.
 WEIGHT_PIVOT_HZ = 1000.0
@@ -34,7 +32,7 @@ BACKOFF_FIDELITY_WEIGHT = 25.0
 
 
 class TransformRequest(BaseModel):
-    wav_base64: str = Field(min_length=16)
+    wav_base64: str = Field(min_length=16, max_length=MAX_WAV_BASE64_CHARS)
     pitch_semitones: float = 2.0
     resonance_scale: float = 1.045
     pitch_range_scale: float = 1.10
@@ -79,8 +77,6 @@ def _pitch_track(sound: parselmouth.Sound, floor: float, ceiling: float) -> dict
         pitch = sound.to_pitch(time_step=0.01, pitch_floor=float(floor), pitch_ceiling=float(ceiling))
         values = np.asarray(pitch.selected_array["frequency"], dtype=float)
     except Exception:
-        # The analyser itself failed. Report that separately so the audit does not
-        # blame the recording for what is really an analysis problem.
         return {**empty, "analysis_failed": True}
 
     valid = np.isfinite(values) & (values > 0)
@@ -161,12 +157,7 @@ def _scale_from_neutral(params: dict[str, float], strength: float) -> dict[str, 
 
 
 def _weight_tilt_gain(freqs: np.ndarray, amount_db: float) -> np.ndarray:
-    """Tilt in dB per frequency bin, symmetric in log frequency about the pivot.
-
-    Anchored to hertz rather than to Nyquist so the same slider value means the
-    same thing at every sample rate, and shaped over 250 Hz - 4 kHz so the whole
-    control travel lands inside the band that carries speech.
-    """
+    """Tilt in dB per frequency bin, symmetric in log frequency about the pivot."""
     low, high = WEIGHT_BAND_HZ
     banded = np.clip(np.asarray(freqs, dtype=float), low, min(high, max(freqs[-1], low + 1.0)))
     octaves = np.log2(banded / WEIGHT_PIVOT_HZ) / WEIGHT_SPAN_OCTAVES
@@ -229,12 +220,6 @@ def _encode_wav(audio: np.ndarray, sr: int) -> bytes:
 
 
 def _output_pitch_bounds(floor: float, ceiling: float, params: dict[str, float]) -> tuple[float, float]:
-    """Follow the requested shift so an upward transform is not clipped by the source ceiling.
-
-    The band is moved with the pitch median and widened only by the intonation
-    scaling, keeping roughly the source's octave width so the tracker does not
-    gain room for octave errors.
-    """
     ratio = 2.0 ** (float(params["pitch_semitones"]) / 12.0)
     widen = math.sqrt(max(1.0, float(params["pitch_range_scale"])))
     low = float(np.clip(floor * ratio / widen, 40.0, 250.0))
@@ -261,7 +246,6 @@ def _run_praat_transform(audio: np.ndarray, sr: int, params: dict[str, float], f
 
 
 def _spectral_tilt_db(audio: np.ndarray, sr: int) -> float | None:
-    """Energy balance of 1-5 kHz against 50-1000 Hz, the usual "vocal weight" proxy."""
     if audio.size < 512:
         return None
     spectrum = np.abs(np.fft.rfft(audio * np.hanning(audio.size))) ** 2
@@ -362,8 +346,6 @@ def transform_audio(audio: np.ndarray, sr: int, params: dict[str, Any]) -> tuple
         out_pitch = _pitch_track(out_sound, out_floor, out_ceiling)
         audit = _artifact_audit(audio, out, sr, source_pitch, out_pitch, effective["pitch_semitones"])
 
-        # A weaker pass always scores better on artifacts simply because it changes
-        # less, so charge it for the distance it gives up from what was asked.
         score = audit["quality_score"] - BACKOFF_FIDELITY_WEIGHT * (1.0 - strength)
         if score > best_score:
             best, best_score = (out, effective, audit, strength), score
@@ -406,7 +388,13 @@ def transform_audio(audio: np.ndarray, sr: int, params: dict[str, Any]) -> tuple
 
 @app.get("/api")
 def health() -> dict[str, Any]:
-    return {"ok": True, "backend": "Praat/Parselmouth", "engine_version": "natural-v2", "max_seconds": MAX_SECONDS}
+    return {
+        "ok": True,
+        "backend": "Praat/Parselmouth",
+        "engine_version": "natural-v2",
+        "max_seconds": MAX_SECONDS,
+        "max_wav_base64_chars": MAX_WAV_BASE64_CHARS,
+    }
 
 
 @app.post("/api/transform")
@@ -428,16 +416,3 @@ def transform(req: TransformRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Transformation failed unexpectedly.") from exc
-
-
-@app.get("/api/frontend")
-def frontend_index() -> FileResponse:
-    return FileResponse(ROOT / "index.html")
-
-
-@app.get("/api/frontend/{filename:path}")
-def frontend_asset(filename: str) -> FileResponse:
-    allowed = {"app.js", "styles.css", "manifest.webmanifest", "sw.js", "icon-192.png", "icon-512.png"}
-    if filename not in allowed:
-        raise HTTPException(status_code=404, detail="Asset not found")
-    return FileResponse(ROOT / filename)
