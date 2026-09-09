@@ -5,7 +5,9 @@ const els = {
   generateBtn: $('generateBtn'), generateStatus: $('generateStatus'),
   playOriginal: $('playOriginal'), playModified: $('playModified'), metrics: $('metrics'),
   pitch: $('pitch'), resonance: $('resonance'), range: $('range'), brightness: $('brightness'),
-  pitchOut: $('pitchOut'), resonanceOut: $('resonanceOut'), rangeOut: $('rangeOut'), brightnessOut: $('brightnessOut')
+  pitchOut: $('pitchOut'), resonanceOut: $('resonanceOut'), rangeOut: $('rangeOut'), brightnessOut: $('brightnessOut'),
+  naturalMode: $('naturalMode'), exploreMode: $('exploreMode'), artifactProtection: $('artifactProtection'),
+  pitchBounds: $('pitchBounds'), resonanceBounds: $('resonanceBounds'), rangeBounds: $('rangeBounds'), brightnessBounds: $('brightnessBounds')
 };
 
 let recorder = null;
@@ -15,20 +17,65 @@ let baselineWav = null;
 let baselineUrl = null;
 let modifiedUrl = null;
 let autoStopTimer = null;
+let mode = 'natural';
 
-const saved = JSON.parse(localStorage.getItem('voiceTargetSettings') || '{}');
+const saved = JSON.parse(localStorage.getItem('voiceTargetSettingsV2') || '{}');
+if (saved.mode === 'explore') mode = 'explore';
 for (const key of ['pitch','resonance','range','brightness']) if (saved[key] != null) els[key].value = saved[key];
+if (saved.artifactProtection != null) els.artifactProtection.checked = Boolean(saved.artifactProtection);
 
 function fmtSigned(n, digits=1) { const v = Number(n); return `${v > 0 ? '+' : ''}${v.toFixed(digits)}`; }
+function clampTo(el, min, max) {
+  el.min = String(min); el.max = String(max);
+  const v = Number(el.value);
+  if (v < min) el.value = String(min);
+  if (v > max) el.value = String(max);
+}
+
+function applyMode(nextMode, { reset = false } = {}) {
+  mode = nextMode === 'explore' ? 'explore' : 'natural';
+  els.naturalMode.classList.toggle('active', mode === 'natural');
+  els.exploreMode.classList.toggle('active', mode === 'explore');
+
+  if (mode === 'natural') {
+    clampTo(els.pitch, -3, 3); clampTo(els.resonance, 0.96, 1.08); clampTo(els.range, 0.8, 1.3); clampTo(els.brightness, -2, 2);
+    els.pitchBounds.innerHTML = '<span>−3 ST</span><span>original</span><span>+3 ST</span>';
+    els.resonanceBounds.innerHTML = '<span>0.960×</span><span>1.000×</span><span>1.080×</span>';
+    els.rangeBounds.innerHTML = '<span>0.80×</span><span>1.00×</span><span>1.30×</span>';
+    els.brightnessBounds.innerHTML = '<span>−2 dB</span><span>0 dB</span><span>+2 dB</span>';
+    if (reset) {
+      els.pitch.value = 2.0; els.resonance.value = 1.045; els.range.value = 1.10; els.brightness.value = 0.25;
+      els.artifactProtection.checked = true;
+    }
+  } else {
+    clampTo(els.pitch, -6, 6); clampTo(els.resonance, 0.9, 1.15); clampTo(els.range, 0.5, 1.8); clampTo(els.brightness, -6, 6);
+    els.pitchBounds.innerHTML = '<span>−6 ST</span><span>original</span><span>+6 ST</span>';
+    els.resonanceBounds.innerHTML = '<span>0.900×</span><span>1.000×</span><span>1.150×</span>';
+    els.rangeBounds.innerHTML = '<span>0.50×</span><span>1.00×</span><span>1.80×</span>';
+    els.brightnessBounds.innerHTML = '<span>−6 dB</span><span>0 dB</span><span>+6 dB</span>';
+  }
+  refreshLabels();
+}
+
 function refreshLabels() {
   els.pitchOut.textContent = `${fmtSigned(els.pitch.value)} ST`;
   els.resonanceOut.textContent = `${Number(els.resonance.value).toFixed(3)}×`;
   els.rangeOut.textContent = `${Number(els.range.value).toFixed(2)}×`;
   els.brightnessOut.textContent = `${fmtSigned(els.brightness.value)} dB`;
-  localStorage.setItem('voiceTargetSettings', JSON.stringify({ pitch: els.pitch.value, resonance: els.resonance.value, range: els.range.value, brightness: els.brightness.value }));
+  localStorage.setItem('voiceTargetSettingsV2', JSON.stringify({
+    mode,
+    pitch: els.pitch.value,
+    resonance: els.resonance.value,
+    range: els.range.value,
+    brightness: els.brightness.value,
+    artifactProtection: els.artifactProtection.checked
+  }));
 }
 for (const el of [els.pitch, els.resonance, els.range, els.brightness]) el.addEventListener('input', refreshLabels);
-refreshLabels();
+els.artifactProtection.addEventListener('change', refreshLabels);
+els.naturalMode.addEventListener('click', () => applyMode('natural', { reset: mode !== 'natural' }));
+els.exploreMode.addEventListener('click', () => applyMode('explore'));
+applyMode(mode);
 
 function base64FromArrayBuffer(buffer) {
   const bytes = new Uint8Array(buffer);
@@ -130,16 +177,24 @@ els.fileInput.addEventListener('change', async e => {
   e.target.value = '';
 });
 
+function metricCard(value, label) {
+  return `<div class="metric"><strong>${value}</strong><small>${label}</small></div>`;
+}
+
 els.generateBtn.addEventListener('click', async () => {
   if (!baselineWav) return;
-  els.generateBtn.disabled = true; els.generateStatus.textContent = 'Generating with Praat…'; clearModified();
+  els.generateBtn.disabled = true;
+  els.generateStatus.textContent = mode === 'natural' ? 'Generating with Natural v2…' : 'Generating in Explore mode…';
+  clearModified();
   try {
     const payload = {
       wav_base64: base64FromArrayBuffer(await baselineWav.arrayBuffer()),
       pitch_semitones: Number(els.pitch.value),
       resonance_scale: Number(els.resonance.value),
       pitch_range_scale: Number(els.range.value),
-      brightness_db: Number(els.brightness.value)
+      brightness_db: Number(els.brightness.value),
+      mode,
+      artifact_protection: els.artifactProtection.checked
     };
     const response = await fetch('/api/transform', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const data = await response.json();
@@ -148,13 +203,26 @@ els.generateBtn.addEventListener('click', async () => {
     modifiedUrl = URL.createObjectURL(blob);
     els.modifiedAudio.src = modifiedUrl; els.playModified.disabled = false;
     const m = data.metrics || {};
-    els.metrics.innerHTML = `
-      <div class="metric"><strong>${m.baseline_pitch_median_hz ?? '—'} Hz</strong><small>baseline median F0</small></div>
-      <div class="metric"><strong>${m.output_pitch_median_hz ?? '—'} Hz</strong><small>modified median F0</small></div>
-      <div class="metric"><strong>${m.observed_pitch_shift_semitones != null ? fmtSigned(m.observed_pitch_shift_semitones, 2) + ' ST' : '—'}</strong><small>observed pitch shift</small></div>
-      <div class="metric"><strong>${m.backend || 'Praat'}</strong><small>processing backend</small></div>`;
+    const audit = m.artifact_audit || {};
+    const quality = audit.quality_score != null ? `${audit.quality_score}/100` : '—';
+    const backoff = m.artifact_backoff_applied ? `${Math.round((m.artifact_backoff_strength || 0) * 100)}% strength` : 'No';
+    els.metrics.innerHTML = [
+      metricCard(`${m.baseline_pitch_median_hz ?? '—'} Hz`, 'baseline median F0'),
+      metricCard(`${m.output_pitch_median_hz ?? '—'} Hz`, 'modified median F0'),
+      metricCard(m.observed_pitch_shift_semitones != null ? `${fmtSigned(m.observed_pitch_shift_semitones, 2)} ST` : '—', 'observed pitch shift'),
+      metricCard(quality, 'signal-quality screen'),
+      metricCard(backoff, 'automatic backoff'),
+      metricCard(m.backend || 'Praat', 'processing backend')
+    ].join('');
     els.metrics.classList.remove('hidden');
-    els.generateStatus.textContent = 'Modified voice ready. A/B it below, then change the sliders and regenerate.';
+
+    if (m.artifact_backoff_applied) {
+      els.generateStatus.textContent = `Modified voice ready. Artifact protection reduced the transformation to ${Math.round((m.artifact_backoff_strength || 0) * 100)}% of the bounded request for a cleaner result.`;
+    } else if (audit.flags?.length) {
+      els.generateStatus.textContent = `Modified voice ready, but the signal-quality screen flagged: ${audit.flags.join('; ')}.`;
+    } else {
+      els.generateStatus.textContent = 'Modified voice ready. A/B it below, then change the sliders and regenerate.';
+    }
   } catch (err) {
     els.generateStatus.textContent = err.message || 'Could not generate the modified voice.';
   } finally { els.generateBtn.disabled = !baselineWav; }
@@ -166,10 +234,19 @@ els.playModified.addEventListener('click', () => play(els.modifiedAudio));
 
 document.querySelectorAll('[data-preset]').forEach(btn => btn.addEventListener('click', () => {
   const p = btn.dataset.preset;
-  if (p === 'pitch') Object.assign(els.pitch, {value: 3}), Object.assign(els.resonance, {value: 1}), Object.assign(els.range, {value: 1}), Object.assign(els.brightness, {value: 0});
-  if (p === 'resonance') Object.assign(els.pitch, {value: 0}), Object.assign(els.resonance, {value: 1.06}), Object.assign(els.range, {value: 1}), Object.assign(els.brightness, {value: 0});
-  if (p === 'combined') Object.assign(els.pitch, {value: 2.5}), Object.assign(els.resonance, {value: 1.055}), Object.assign(els.range, {value: 1.15}), Object.assign(els.brightness, {value: .5});
-  if (p === 'reset') Object.assign(els.pitch, {value: 0}), Object.assign(els.resonance, {value: 1}), Object.assign(els.range, {value: 1}), Object.assign(els.brightness, {value: 0});
+  if (p === 'pitch') {
+    els.pitch.value = mode === 'natural' ? 2.0 : 3.0; els.resonance.value = 1; els.range.value = 1; els.brightness.value = 0;
+  }
+  if (p === 'resonance') {
+    els.pitch.value = 0; els.resonance.value = mode === 'natural' ? 1.045 : 1.06; els.range.value = 1; els.brightness.value = 0;
+  }
+  if (p === 'combined') {
+    if (mode !== 'natural') applyMode('natural');
+    els.pitch.value = 2.0; els.resonance.value = 1.045; els.range.value = 1.10; els.brightness.value = 0.25; els.artifactProtection.checked = true;
+  }
+  if (p === 'reset') {
+    els.pitch.value = 0; els.resonance.value = 1; els.range.value = 1; els.brightness.value = 0;
+  }
   refreshLabels();
 }));
 
