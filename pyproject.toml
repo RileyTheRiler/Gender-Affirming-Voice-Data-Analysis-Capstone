@@ -11,7 +11,12 @@ dependencies = [
 [project.optional-dependencies]
 # WORLD-vocoder backend. Kept optional because pyworld ships as an sdist and needs
 # a C++ toolchain to build; the API falls back to the Praat path when it is absent.
-world = ["pyworld>=0.3.4,<0.4"]
+#
+# setuptools is a real runtime requirement here, not a build one: pyworld 0.3.5
+# calls pkg_resources.get_distribution() at import time, and Python 3.12 no longer
+# ships setuptools by default. Without it pyworld compiles and installs cleanly and
+# then fails on import, which is a much more confusing failure than not building.
+world = ["pyworld>=0.3.4,<0.4", "setuptools>=68"]
 
 [tool.setuptools]
 # `bench/` is a development harness, not part of the deployed function. Without an

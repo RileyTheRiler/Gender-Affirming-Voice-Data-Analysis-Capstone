@@ -146,6 +146,10 @@ frequencies are set, not estimated — at the cost of realism:
   parameter setting. It cannot separate the two paths on this material, which is why
   the identity and round-trip tests were added. That is also a finding about the
   audit: it is tuned for catching gross failures, not for grading quality.
+- **A silent skip is not a pass.** The first CI run on this branch went green with
+  `12 passed, 21 skipped` — pyworld had built but could not import, and the tests
+  skipped themselves rather than failing. CI now asserts the backend imports before
+  running the suite, so this cannot read as green again.
 - **The measurement had to be built and validated first.** Praat's Burg formant
   tracker was tried and rejected — it inserts spurious poles and renumbers formants
   on these signals. Section 0 of the results is the replacement estimator measured
@@ -161,9 +165,13 @@ round. Before it could become the default:
 1. Listening comparison on real recordings, including a low-pitched voice (§6).
 2. Fix the analysis cost by caching the WORLD decomposition across backoff passes (§5).
 3. A better independence measurement, or drop the claim (§4).
-4. Decide whether `pyworld` can be built in the deployment environment at all — it
-   ships as an sdist and needs a C++ toolchain. It is an optional extra here, and the
-   API falls back to Praat and reports the import error at `/api` when it is missing.
+4. ~~Decide whether `pyworld` can be built in the deployment environment~~ —
+   **settled, with a catch.** It builds from sdist on a clean Ubuntu runner with
+   Python 3.12 in about 17 s. But pyworld 0.3.5 calls
+   `pkg_resources.get_distribution()` at import time, and Python 3.12 no longer ships
+   setuptools, so it installs cleanly and then fails to import. `setuptools` is
+   therefore a runtime dependency of the `world` extra, not just a build one. Expect
+   the same on any Python 3.12+ deployment target.
 
 ## Using it
 
