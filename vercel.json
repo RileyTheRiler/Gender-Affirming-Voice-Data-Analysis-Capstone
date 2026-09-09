@@ -2,15 +2,6 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "cleanUrls": true,
-  "rewrites": [
-    { "source": "/", "destination": "/api/frontend" },
-    { "source": "/app.js", "destination": "/api/frontend/app.js" },
-    { "source": "/styles.css", "destination": "/api/frontend/styles.css" },
-    { "source": "/manifest.webmanifest", "destination": "/api/frontend/manifest.webmanifest" },
-    { "source": "/sw.js", "destination": "/api/frontend/sw.js" },
-    { "source": "/icon-192.png", "destination": "/api/frontend/icon-192.png" },
-    { "source": "/icon-512.png", "destination": "/api/frontend/icon-512.png" }
-  ],
   "headers": [
     {
       "source": "/(.*)",
