@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#101217" />
+  <meta name="description" content="Record your voice, change personally selected acoustic parameters, and compare the result." />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="stylesheet" href="/styles.css" />
+  <title>Voice Target Lab</title>
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">VOICE TARGET LAB · MOBILE</p>
+        <h1>Shape a target version of your own voice.</h1>
+        <p class="lede">Record once, change acoustic parameters, then A/B your original and modified voice. No gender score and no universal target.</p>
+      </div>
+      <div class="privacy-pill">Audio is processed transiently by this app's Vercel function and is not saved by the app.</div>
+    </header>
+
+    <section class="card" aria-labelledby="step1">
+      <div class="section-head"><span class="step">1</span><div><h2 id="step1">Record or import a baseline</h2><p>Use a 3–10 second voiced sentence. Maximum 15 seconds.</p></div></div>
+      <label class="prompt-label" for="prompt">Optional reference phrase</label>
+      <input id="prompt" class="text-input" value="I have a meeting tomorrow morning." />
+      <div class="button-row">
+        <button id="recordBtn" class="primary">● Record</button>
+        <label class="secondary file-button">Import audio<input id="fileInput" type="file" accept="audio/*" /></label>
+      </div>
+      <div id="recordStatus" class="status">No baseline yet.</div>
+      <audio id="baselineAudio" controls preload="metadata"></audio>
+    </section>
+
+    <section class="card" aria-labelledby="step2">
+      <div class="section-head"><span class="step">2</span><div><h2 id="step2">Change the target</h2><p>Start with one parameter at a time so you can hear what changed.</p></div></div>
+
+      <div class="control">
+        <div class="control-title"><label for="pitch">Pitch median</label><output id="pitchOut">+2.5 ST</output></div>
+        <input id="pitch" type="range" min="-6" max="6" step="0.1" value="2.5" />
+        <div class="minmax"><span>−6 ST</span><span>original</span><span>+6 ST</span></div>
+      </div>
+
+      <div class="control">
+        <div class="control-title"><label for="resonance">Formant / resonance scale</label><output id="resonanceOut">1.055×</output></div>
+        <input id="resonance" type="range" min="0.9" max="1.15" step="0.005" value="1.055" />
+        <div class="minmax"><span>lower</span><span>1.000×</span><span>higher</span></div>
+      </div>
+
+      <div class="control">
+        <div class="control-title"><label for="range">Intonation range</label><output id="rangeOut">1.15×</output></div>
+        <input id="range" type="range" min="0.5" max="1.8" step="0.05" value="1.15" />
+        <div class="minmax"><span>narrower</span><span>1.00×</span><span>wider</span></div>
+      </div>
+
+      <div class="control">
+        <div class="control-title"><label for="brightness">Brightness <span class="experimental">experimental</span></label><output id="brightnessOut">+0.5 dB</output></div>
+        <input id="brightness" type="range" min="-6" max="6" step="0.1" value="0.5" />
+        <div class="minmax"><span>darker</span><span>0 dB</span><span>brighter</span></div>
+      </div>
+
+      <div class="preset-row">
+        <button class="chip" data-preset="pitch">Pitch only</button>
+        <button class="chip" data-preset="resonance">Resonance only</button>
+        <button class="chip" data-preset="combined">Gentle combined</button>
+        <button class="chip" data-preset="reset">Reset</button>
+      </div>
+
+      <button id="generateBtn" class="generate" disabled>Generate modified voice</button>
+      <div id="generateStatus" class="status">Record or import a baseline first.</div>
+    </section>
+
+    <section class="card" aria-labelledby="step3">
+      <div class="section-head"><span class="step">3</span><div><h2 id="step3">A/B listen</h2><p>Alternate between the same utterance before and after processing.</p></div></div>
+      <div class="ab-grid">
+        <button id="playOriginal" class="ab-button" disabled><span>A</span>Play original</button>
+        <button id="playModified" class="ab-button modified" disabled><span>B</span>Play modified</button>
+      </div>
+      <audio id="modifiedAudio" controls preload="metadata"></audio>
+      <div id="metrics" class="metrics hidden"></div>
+    </section>
+
+    <section class="card compact">
+      <h2>What the controls mean</h2>
+      <dl class="definitions">
+        <div><dt>Pitch median</dt><dd>Moves the overall F0 contour up or down while keeping the utterance duration approximately fixed.</dd></div>
+        <div><dt>Resonance</dt><dd>Uses Praat formant scaling. This is independent of the requested pitch shift.</dd></div>
+        <div><dt>Intonation</dt><dd>Expands or compresses variation around the utterance's pitch median.</dd></div>
+        <div><dt>Brightness</dt><dd>An experimental spectral-tilt control. Treat it as exploratory, not as a clinical target.</dd></div>
+      </dl>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
