@@ -1,4 +1,4 @@
-const CACHE = 'voice-target-lab-mobile-v2';
+const CACHE = 'voice-target-lab-mobile-v3';
 const PRECACHE = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest'];
 
 self.addEventListener('install', event => {
