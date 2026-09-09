@@ -1,10 +1,13 @@
 import numpy as np
 import parselmouth
 import pytest
+from pydantic import ValidationError
 
 from api.index import (
     LEVEL_GAIN_MAX,
     LEVEL_GAIN_MIN,
+    MAX_WAV_BASE64_CHARS,
+    TransformRequest,
     _adaptive_pitch_bounds,
     _apply_weight_tilt_stft,
     _normalize_params,
@@ -42,6 +45,17 @@ def test_transform_returns_same_length_and_finite_natural():
     assert meta["backend"].startswith("Praat/Parselmouth")
     assert meta["mode"] == "natural"
     assert 0 <= meta["artifact_audit"]["quality_score"] <= 100
+
+
+def test_request_model_rejects_oversized_base64_before_decode():
+    with pytest.raises(ValidationError):
+        TransformRequest(wav_base64="A" * (MAX_WAV_BASE64_CHARS + 1))
+
+
+def test_15_second_24khz_pcm_payload_fits_request_cap():
+    wav_bytes = 44 + int(15 * 24000) * 2
+    base64_chars = 4 * ((wav_bytes + 2) // 3)
+    assert base64_chars < MAX_WAV_BASE64_CHARS
 
 
 def test_natural_controls_are_conservatively_clipped():
@@ -95,14 +109,12 @@ def test_weight_tilt_is_anchored_to_hertz_not_nyquist():
     at_24k = _weight_tilt_gain(np.append(freqs, 12000.0), 2.0)[:3]
     at_48k = _weight_tilt_gain(np.append(freqs, 24000.0), 2.0)[:3]
     assert np.allclose(at_24k, at_48k)
-    # Full travel is spent inside the speech band, symmetric about the 1 kHz pivot.
     assert at_48k[0] == pytest.approx(-2.0)
     assert at_48k[1] == pytest.approx(0.0)
     assert at_48k[2] == pytest.approx(2.0)
 
 
 def test_weight_tilt_moves_speech_band_energy_audibly():
-    """The old Nyquist-normalised tilt moved this by ~0.12 dB, far below a JND."""
     y, sr = voiced()
     before = _spectral_tilt_db(y, sr)
     lighter = _spectral_tilt_db(_apply_weight_tilt_stft(y, sr, 2.0), sr)
@@ -112,7 +124,6 @@ def test_weight_tilt_moves_speech_band_energy_audibly():
 
 
 def test_level_audit_band_matches_leveller_clamp():
-    """A gain the leveller itself chose must not be reported as an anomaly."""
     assert LEVEL_GAIN_MIN < 1.0 < LEVEL_GAIN_MAX
 
 
@@ -135,7 +146,6 @@ def test_adaptive_pitch_bounds_follow_speaker():
 
 
 def test_backoff_prefers_the_requested_strength_when_quality_is_close():
-    """A weaker pass scores better on artifacts by construction; it must pay for that."""
     y, sr = voiced()
     _, meta = transform_audio(
         y,

@@ -1,8 +1,16 @@
-const CACHE = 'voice-target-lab-mobile-v3';
-const PRECACHE = ['/', '/index.html', '/styles.css', '/app.js', '/manifest.webmanifest'];
+const CACHE = 'voice-target-lab-mobile-v4';
+const PRECACHE = ['/', '/styles.css', '/app.js', '/manifest.webmanifest'];
 
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(PRECACHE)).then(() => self.skipWaiting()));
+  event.waitUntil(
+    caches.open(CACHE)
+      .then(cache => Promise.all(PRECACHE.map(async url => {
+        const response = await fetch(url, { cache: 'reload' });
+        if (!response.ok) throw new Error(`Precache failed for ${url}: ${response.status}`);
+        await cache.put(url, response.clone());
+      })))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', event => {
@@ -18,10 +26,12 @@ self.addEventListener('fetch', event => {
   event.respondWith(
     fetch(event.request)
       .then(response => {
-        const copy = response.clone();
-        caches.open(CACHE).then(cache => cache.put(event.request, copy));
+        if (response.ok && response.type === 'basic') {
+          const copy = response.clone();
+          caches.open(CACHE).then(cache => cache.put(event.request, copy));
+        }
         return response;
       })
-      .catch(() => caches.match(event.request))
+      .catch(async () => (await caches.match(event.request)) || (await caches.match('/')))
   );
 });

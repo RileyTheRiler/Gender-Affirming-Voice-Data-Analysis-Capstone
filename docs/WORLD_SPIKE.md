@@ -111,6 +111,10 @@ WORLD runs ~10× slower than Praat: 0.19× realtime against 0.019×.
 | 5 s | 0.10 s | 0.96 s | 3.9 s |
 | 15 s | 0.25 s | 2.86 s | **11.4 s** |
 
+These figures are at 24 kHz mono, which is what the API now receives — uploads are
+downsampled to mono 24 kHz before they reach the transform, so this is the real
+operating point rather than a favourable one.
+
 The artifact-protection loop can run the whole transform up to four times. At the
 15-second limit that is 11.4 s inside a Vercel function — over the 10 s default for
 Hobby-tier Python functions. Before WORLD could become the default, at least one of:
