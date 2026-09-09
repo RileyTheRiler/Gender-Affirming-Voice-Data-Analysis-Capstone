@@ -4,17 +4,20 @@ import base64
 import io
 import math
 import wave
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import parselmouth
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from parselmouth.praat import call
 
 app = FastAPI(title="Voice Target Lab API")
 
 MAX_SECONDS = 15.0
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class TransformRequest(BaseModel):
@@ -178,3 +181,25 @@ def transform(req: TransformRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Transformation failed unexpectedly.") from exc
+
+
+# Explicit frontend routes make the deployment work even when Vercel does not
+# automatically expose repository-root static files for a Python-function project.
+@app.get("/api/frontend")
+def frontend_index() -> FileResponse:
+    return FileResponse(ROOT / "index.html")
+
+
+@app.get("/api/frontend/{filename:path}")
+def frontend_asset(filename: str) -> FileResponse:
+    allowed = {
+        "app.js",
+        "styles.css",
+        "manifest.webmanifest",
+        "sw.js",
+        "icon-192.png",
+        "icon-512.png",
+    }
+    if filename not in allowed:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    return FileResponse(ROOT / filename)
