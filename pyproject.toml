@@ -12,3 +12,9 @@ dependencies = [
 # WORLD-vocoder backend. Kept optional because pyworld ships as an sdist and needs
 # a C++ toolchain to build; the API falls back to the Praat path when it is absent.
 world = ["pyworld>=0.3.4,<0.4"]
+
+[tool.setuptools]
+# `bench/` is a development harness, not part of the deployed function. Without an
+# explicit list, setuptools' flat-layout discovery sees two top-level packages and
+# refuses to build at all.
+packages = ["api"]
