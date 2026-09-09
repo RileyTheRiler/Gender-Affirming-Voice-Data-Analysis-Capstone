@@ -33,36 +33,42 @@
     </section>
 
     <section class="card" aria-labelledby="step2">
-      <div class="section-head"><span class="step">2</span><div><h2 id="step2">Change the target</h2><p>Start with one parameter at a time so you can hear what changed.</p></div></div>
+      <div class="section-head"><span class="step">2</span><div><h2 id="step2">Change the target</h2><p>Natural mode prioritizes a smoother, more human-sounding preview. Explore keeps the wider research ranges.</p></div></div>
+
+      <div class="mode-box" role="group" aria-label="Processing mode">
+        <button id="naturalMode" class="mode-button active" type="button"><strong>Natural</strong><small>gentler limits + artifact protection</small></button>
+        <button id="exploreMode" class="mode-button" type="button"><strong>Explore</strong><small>wider experimental ranges</small></button>
+      </div>
+      <label class="protect-row"><input id="artifactProtection" type="checkbox" checked /> <span><strong>Artifact protection</strong><small>Automatically backs off the transformation when pitch continuity or signal checks look unstable.</small></span></label>
 
       <div class="control">
-        <div class="control-title"><label for="pitch">Pitch median</label><output id="pitchOut">+2.5 ST</output></div>
-        <input id="pitch" type="range" min="-6" max="6" step="0.1" value="2.5" />
-        <div class="minmax"><span>−6 ST</span><span>original</span><span>+6 ST</span></div>
+        <div class="control-title"><label for="pitch">Pitch median</label><output id="pitchOut">+2.0 ST</output></div>
+        <input id="pitch" type="range" min="-3" max="3" step="0.1" value="2.0" />
+        <div id="pitchBounds" class="minmax"><span>−3 ST</span><span>original</span><span>+3 ST</span></div>
       </div>
 
       <div class="control">
-        <div class="control-title"><label for="resonance">Formant / resonance scale</label><output id="resonanceOut">1.055×</output></div>
-        <input id="resonance" type="range" min="0.9" max="1.15" step="0.005" value="1.055" />
-        <div class="minmax"><span>lower</span><span>1.000×</span><span>higher</span></div>
+        <div class="control-title"><label for="resonance">Formant / resonance scale</label><output id="resonanceOut">1.045×</output></div>
+        <input id="resonance" type="range" min="0.96" max="1.08" step="0.005" value="1.045" />
+        <div id="resonanceBounds" class="minmax"><span>0.960×</span><span>1.000×</span><span>1.080×</span></div>
       </div>
 
       <div class="control">
-        <div class="control-title"><label for="range">Intonation range</label><output id="rangeOut">1.15×</output></div>
-        <input id="range" type="range" min="0.5" max="1.8" step="0.05" value="1.15" />
-        <div class="minmax"><span>narrower</span><span>1.00×</span><span>wider</span></div>
+        <div class="control-title"><label for="range">Intonation range</label><output id="rangeOut">1.10×</output></div>
+        <input id="range" type="range" min="0.8" max="1.3" step="0.05" value="1.10" />
+        <div id="rangeBounds" class="minmax"><span>0.80×</span><span>1.00×</span><span>1.30×</span></div>
       </div>
 
       <div class="control">
-        <div class="control-title"><label for="brightness">Brightness <span class="experimental">experimental</span></label><output id="brightnessOut">+0.5 dB</output></div>
-        <input id="brightness" type="range" min="-6" max="6" step="0.1" value="0.5" />
-        <div class="minmax"><span>darker</span><span>0 dB</span><span>brighter</span></div>
+        <div class="control-title"><label for="brightness">Brightness <span class="experimental">experimental</span></label><output id="brightnessOut">+0.3 dB</output></div>
+        <input id="brightness" type="range" min="-2" max="2" step="0.1" value="0.25" />
+        <div id="brightnessBounds" class="minmax"><span>−2 dB</span><span>0 dB</span><span>+2 dB</span></div>
       </div>
 
       <div class="preset-row">
         <button class="chip" data-preset="pitch">Pitch only</button>
         <button class="chip" data-preset="resonance">Resonance only</button>
-        <button class="chip" data-preset="combined">Gentle combined</button>
+        <button class="chip" data-preset="combined">Natural starting point</button>
         <button class="chip" data-preset="reset">Reset</button>
       </div>
 
@@ -83,6 +89,7 @@
     <section class="card compact">
       <h2>What the controls mean</h2>
       <dl class="definitions">
+        <div><dt>Natural mode</dt><dd>Uses speaker-adaptive pitch analysis, conservative parameter limits, time-local spectral shaping, and optional automatic backoff when artifact checks fail.</dd></div>
         <div><dt>Pitch median</dt><dd>Moves the overall F0 contour up or down while keeping the utterance duration approximately fixed.</dd></div>
         <div><dt>Resonance</dt><dd>Uses Praat formant scaling. This is independent of the requested pitch shift.</dd></div>
         <div><dt>Intonation</dt><dd>Expands or compresses variation around the utterance's pitch median.</dd></div>
