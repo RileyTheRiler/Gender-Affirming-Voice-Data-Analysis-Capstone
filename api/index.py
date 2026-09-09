@@ -14,6 +14,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from parselmouth.praat import call
 
+try:  # Vercel imports this file as a top-level module; pytest imports the package.
+    from . import world_backend
+except ImportError:  # pragma: no cover
+    import world_backend  # type: ignore[no-redef]
+
 app = FastAPI(title="Voice Target Lab API")
 
 MAX_SECONDS = 15.0
@@ -32,6 +37,48 @@ LEVEL_GAIN_MAX = 1.50
 # How much quality a backoff pass must buy to justify weakening the transformation.
 BACKOFF_FIDELITY_WEIGHT = 25.0
 
+# Parameter limits, per engine and mode.
+#
+# Pitch, intonation range and brightness are held identical across engines so the
+# two paths can be compared like for like. Only the two limits that exist because
+# of how the engine works differ:
+#
+# * resonance ceiling - Praat moves formants by resampling, so it has to stay
+#   near 1.0 or the resampling becomes audible; WORLD warps the envelope
+#   directly, so it is allowed the 15-25% the acoustic literature describes.
+# * breathiness - Praat's PSOLA excitation cannot express it at all, so its
+#   limits are pinned to zero rather than left unbounded and silently ignored.
+PARAM_LIMITS: dict[tuple[str, str], dict[str, tuple[float, float]]] = {
+    ("praat", "natural"): {
+        "pitch_semitones": (-3.0, 3.0),
+        "resonance_scale": (0.96, 1.08),
+        "pitch_range_scale": (0.80, 1.30),
+        "brightness_db": (-2.0, 2.0),
+        "breathiness": (0.0, 0.0),
+    },
+    ("praat", "explore"): {
+        "pitch_semitones": (-6.0, 6.0),
+        "resonance_scale": (0.90, 1.15),
+        "pitch_range_scale": (0.50, 1.80),
+        "brightness_db": (-6.0, 6.0),
+        "breathiness": (0.0, 0.0),
+    },
+    ("world", "natural"): {
+        "pitch_semitones": (-3.0, 3.0),
+        "resonance_scale": (0.88, 1.15),
+        "pitch_range_scale": (0.80, 1.30),
+        "brightness_db": (-2.0, 2.0),
+        "breathiness": (-0.5, 0.5),
+    },
+    ("world", "explore"): {
+        "pitch_semitones": (-6.0, 6.0),
+        "resonance_scale": (0.80, 1.25),
+        "pitch_range_scale": (0.50, 1.80),
+        "brightness_db": (-6.0, 6.0),
+        "breathiness": (-1.0, 1.0),
+    },
+}
+
 
 class TransformRequest(BaseModel):
     wav_base64: str = Field(min_length=16)
@@ -41,6 +88,12 @@ class TransformRequest(BaseModel):
     brightness_db: float = 0.25
     mode: Literal["natural", "explore"] = "natural"
     artifact_protection: bool = True
+    engine: Literal["praat", "world"] = "praat"
+    # WORLD-only controls. They are accepted for either engine so the client can
+    # keep one parameter set, but the response reports when an engine ignored one.
+    breathiness: float = 0.0
+    resonance_low_scale: float | None = None
+    resonance_high_scale: float | None = None
 
 
 def _read_wav(payload: bytes) -> tuple[np.ndarray, int]:
@@ -120,44 +173,61 @@ def _adaptive_pitch_bounds(sound: parselmouth.Sound) -> tuple[float, float, dict
     return floor, ceiling, wide
 
 
-def _normalize_params(params: dict[str, Any]) -> tuple[dict[str, float], dict[str, float], str, bool]:
+def _normalize_params(params: dict[str, Any]) -> tuple[dict[str, float], dict[str, float], str, str, bool]:
+    """Clip the request to what the chosen engine and mode can actually deliver."""
     mode = str(params.get("mode", "natural")).lower()
     if mode not in {"natural", "explore"}:
         mode = "natural"
+    engine = str(params.get("engine", "praat")).lower()
+    if engine not in {"praat", "world"}:
+        engine = "praat"
+    if engine == "world" and not world_backend.world_available():
+        engine = "praat"
     protect = bool(params.get("artifact_protection", mode == "natural"))
 
+    resonance = float(params.get("resonance_scale", 1.0))
+    low = params.get("resonance_low_scale")
+    high = params.get("resonance_high_scale")
     requested = {
         "pitch_semitones": float(params.get("pitch_semitones", 0.0)),
-        "resonance_scale": float(params.get("resonance_scale", 1.0)),
+        "resonance_scale": resonance,
+        "resonance_low_scale": resonance if low is None else float(low),
+        "resonance_high_scale": resonance if high is None else float(high),
         "pitch_range_scale": float(params.get("pitch_range_scale", 1.0)),
         "brightness_db": float(params.get("brightness_db", 0.0)),
+        "breathiness": float(params.get("breathiness", 0.0)),
     }
 
-    if mode == "natural":
-        effective = {
-            "pitch_semitones": float(np.clip(requested["pitch_semitones"], -3.0, 3.0)),
-            "resonance_scale": float(np.clip(requested["resonance_scale"], 0.96, 1.08)),
-            "pitch_range_scale": float(np.clip(requested["pitch_range_scale"], 0.80, 1.30)),
-            "brightness_db": float(np.clip(requested["brightness_db"], -2.0, 2.0)),
-        }
+    limits = PARAM_LIMITS[(engine, mode)]
+    effective = {key: float(np.clip(requested[key], *bounds)) for key, bounds in limits.items()}
+    # The two band scales share the resonance limits; on Praat they collapse onto
+    # the single scale it supports, because resampling cannot split the bands.
+    band_bounds = limits["resonance_scale"]
+    if engine == "world":
+        effective["resonance_low_scale"] = float(np.clip(requested["resonance_low_scale"], *band_bounds))
+        effective["resonance_high_scale"] = float(np.clip(requested["resonance_high_scale"], *band_bounds))
     else:
-        effective = {
-            "pitch_semitones": float(np.clip(requested["pitch_semitones"], -6.0, 6.0)),
-            "resonance_scale": float(np.clip(requested["resonance_scale"], 0.90, 1.15)),
-            "pitch_range_scale": float(np.clip(requested["pitch_range_scale"], 0.50, 1.80)),
-            "brightness_db": float(np.clip(requested["brightness_db"], -6.0, 6.0)),
-        }
-    return requested, effective, mode, protect
+        effective["resonance_low_scale"] = effective["resonance_scale"]
+        effective["resonance_high_scale"] = effective["resonance_scale"]
+    return requested, effective, mode, engine, protect
+
+
+# Neutral (no-op) value for each control, used when a backoff pass has to pull the
+# whole parameter set part-way back toward the untransformed voice.
+NEUTRAL = {
+    "pitch_semitones": 0.0,
+    "resonance_scale": 1.0,
+    "resonance_low_scale": 1.0,
+    "resonance_high_scale": 1.0,
+    "pitch_range_scale": 1.0,
+    "brightness_db": 0.0,
+    "breathiness": 0.0,
+}
 
 
 def _scale_from_neutral(params: dict[str, float], strength: float) -> dict[str, float]:
     strength = float(np.clip(strength, 0.0, 1.0))
-    return {
-        "pitch_semitones": params["pitch_semitones"] * strength,
-        "resonance_scale": 1.0 + (params["resonance_scale"] - 1.0) * strength,
-        "pitch_range_scale": 1.0 + (params["pitch_range_scale"] - 1.0) * strength,
-        "brightness_db": params["brightness_db"] * strength,
-    }
+    return {key: neutral + (float(params.get(key, neutral)) - neutral) * strength for key, neutral in NEUTRAL.items()}
 
 
 def _weight_tilt_gain(freqs: np.ndarray, amount_db: float) -> np.ndarray:
@@ -260,6 +330,46 @@ def _run_praat_transform(audio: np.ndarray, sr: int, params: dict[str, float], f
     return out
 
 
+def _run_world_transform(
+    audio: np.ndarray,
+    sr: int,
+    params: dict[str, float],
+    floor: float,
+    ceiling: float,
+) -> np.ndarray:
+    """Resynthesise through WORLD with each stream edited independently.
+
+    Unlike the Praat path, the brightness tilt is folded into the spectral
+    envelope the vocoder synthesises from, so it costs no extra STFT pass and
+    cannot add overlap-add smearing of its own.
+    """
+    try:
+        frames = world_backend.analyze(audio, sr, floor, ceiling)
+    except Exception as exc:
+        raise ValueError("WORLD could not analyse this recording. Try recording again with clearer voiced speech.") from exc
+
+    freqs = frames["freqs"]
+    out_floor, out_ceiling = _output_pitch_bounds(floor, ceiling, params)
+    f0, _ = world_backend.transform_f0(
+        frames["f0"],
+        params["pitch_semitones"],
+        params["pitch_range_scale"],
+        out_floor,
+        out_ceiling,
+    )
+    sp = world_backend.warp_spectral_envelope(
+        frames["sp"], freqs, params["resonance_low_scale"], params["resonance_high_scale"]
+    )
+    if abs(params["brightness_db"]) > 1e-6:
+        sp = world_backend.apply_envelope_tilt(sp, freqs, _weight_tilt_gain(freqs, params["brightness_db"]))
+    ap = world_backend.apply_breathiness(frames["ap"], freqs, params["breathiness"])
+
+    try:
+        return world_backend.synthesize(f0, sp, ap, sr, length=audio.size)
+    except Exception as exc:
+        raise ValueError("WORLD could not resynthesise this recording.") from exc
+
+
 def _spectral_tilt_db(audio: np.ndarray, sr: int) -> float | None:
     """Energy balance of 1-5 kHz against 50-1000 Hz, the usual "vocal weight" proxy."""
     if audio.size < 512:
@@ -336,8 +446,13 @@ def _artifact_audit(source: np.ndarray, output: np.ndarray, sr: int, source_pitc
     }
 
 
+def _backend_label(engine: str, mode: str) -> str:
+    family = "WORLD/pyworld" if engine == "world" else "Praat/Parselmouth"
+    return f"{family} · {'Natural v2' if mode == 'natural' else 'Explore'}"
+
+
 def transform_audio(audio: np.ndarray, sr: int, params: dict[str, Any]) -> tuple[np.ndarray, dict[str, Any]]:
-    requested, bounded, mode, protect = _normalize_params(params)
+    requested, bounded, mode, engine, protect = _normalize_params(params)
     reference_rms = float(np.sqrt(np.mean(np.square(audio))))
     sound = parselmouth.Sound(audio, sampling_frequency=float(sr))
     floor, ceiling, initial_wide = _adaptive_pitch_bounds(sound)
@@ -354,8 +469,12 @@ def transform_audio(audio: np.ndarray, sr: int, params: dict[str, Any]) -> tuple
     best_score = -math.inf
     for strength in strengths:
         effective = _scale_from_neutral(bounded, strength)
-        raw = _run_praat_transform(audio, sr, effective, floor, ceiling, old_median)
-        raw = _apply_weight_tilt_stft(raw, sr, effective["brightness_db"])
+        if engine == "world":
+            raw = _run_world_transform(audio, sr, effective, floor, ceiling)
+        else:
+            raw = _run_praat_transform(audio, sr, effective, floor, ceiling, old_median)
+            # WORLD folds the tilt into its envelope; Praat needs a separate pass.
+            raw = _apply_weight_tilt_stft(raw, sr, effective["brightness_db"])
         out = _safe_level(raw, reference_rms)
         out_floor, out_ceiling = _output_pitch_bounds(floor, ceiling, effective)
         out_sound = parselmouth.Sound(out, sampling_frequency=float(sr))
@@ -389,6 +508,11 @@ def transform_audio(audio: np.ndarray, sr: int, params: dict[str, Any]) -> tuple
         "requested": requested,
         "effective": {k: round(float(v), 5) for k, v in effective.items()},
         "mode": mode,
+        "engine": engine,
+        "engine_requested": str(params.get("engine", "praat")).lower(),
+        "world_available": world_backend.world_available(),
+        "supports_breathiness": engine == "world",
+        "supports_per_band_resonance": engine == "world",
         "artifact_protection": protect,
         "artifact_backoff_applied": backed_off,
         "artifact_backoff_strength": round(float(applied_strength), 2),
@@ -400,13 +524,20 @@ def transform_audio(audio: np.ndarray, sr: int, params: dict[str, Any]) -> tuple
             "output_ceiling_hz": round(out_ceiling, 1),
             "source_voiced_fraction": round(float(source_pitch["voiced_fraction"]), 3),
         },
-        "backend": "Praat/Parselmouth · Natural v2" if mode == "natural" else "Praat/Parselmouth · Explore",
+        "backend": _backend_label(engine, mode),
     }
 
 
 @app.get("/api")
 def health() -> dict[str, Any]:
-    return {"ok": True, "backend": "Praat/Parselmouth", "engine_version": "natural-v2", "max_seconds": MAX_SECONDS}
+    return {
+        "ok": True,
+        "backend": "Praat/Parselmouth",
+        "engine_version": "natural-v2",
+        "max_seconds": MAX_SECONDS,
+        "engines": ["praat"] + (["world"] if world_backend.world_available() else []),
+        "world_import_error": world_backend.world_import_error(),
+    }
 
 
 @app.post("/api/transform")
@@ -421,6 +552,10 @@ def transform(req: TransformRequest) -> dict[str, Any]:
             "brightness_db": req.brightness_db,
             "mode": req.mode,
             "artifact_protection": req.artifact_protection,
+            "engine": req.engine,
+            "breathiness": req.breathiness,
+            "resonance_low_scale": req.resonance_low_scale,
+            "resonance_high_scale": req.resonance_high_scale,
         })
         encoded = base64.b64encode(_encode_wav(out, sr)).decode("ascii")
         return {"wav_base64": encoded, "sample_rate": sr, "metrics": metrics}

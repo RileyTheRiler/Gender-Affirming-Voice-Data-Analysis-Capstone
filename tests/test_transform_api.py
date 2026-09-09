@@ -45,7 +45,7 @@ def test_transform_returns_same_length_and_finite_natural():
 
 
 def test_natural_controls_are_conservatively_clipped():
-    _, effective, mode, protect = _normalize_params(
+    _, effective, mode, _engine, protect = _normalize_params(
         dict(pitch_semitones=99, resonance_scale=9, pitch_range_scale=9, brightness_db=99, mode="natural")
     )
     assert mode == "natural"
@@ -57,7 +57,7 @@ def test_natural_controls_are_conservatively_clipped():
 
 
 def test_explore_preserves_wider_limits():
-    _, effective, mode, _ = _normalize_params(
+    _, effective, mode, _engine, _ = _normalize_params(
         dict(pitch_semitones=99, resonance_scale=9, pitch_range_scale=9, brightness_db=99, mode="explore")
     )
     assert mode == "explore"

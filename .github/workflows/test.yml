@@ -16,5 +16,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install . pytest
+      - name: Install optional WORLD backend
+        # pyworld ships as an sdist and needs a C++ toolchain. If it cannot be
+        # built the WORLD tests skip themselves, so this must not fail the job.
+        continue-on-error: true
+        run: python -m pip install '.[world]'
       - name: Run tests
         run: python -m pytest -q

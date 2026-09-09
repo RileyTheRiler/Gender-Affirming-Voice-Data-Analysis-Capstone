@@ -7,3 +7,8 @@ dependencies = [
   "numpy>=2.0,<3",
   "praat-parselmouth>=0.4.7,<0.5"
 ]
+
+[project.optional-dependencies]
+# WORLD-vocoder backend. Kept optional because pyworld ships as an sdist and needs
+# a C++ toolchain to build; the API falls back to the Praat path when it is absent.
+world = ["pyworld>=0.3.4,<0.4"]
