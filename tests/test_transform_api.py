@@ -1,11 +1,17 @@
 import numpy as np
 import parselmouth
+import pytest
 
 from api.index import (
+    LEVEL_GAIN_MAX,
+    LEVEL_GAIN_MIN,
     _adaptive_pitch_bounds,
-    _apply_brightness_stft,
+    _apply_weight_tilt_stft,
     _normalize_params,
+    _output_pitch_bounds,
     _scale_from_neutral,
+    _spectral_tilt_db,
+    _weight_tilt_gain,
     transform_audio,
 )
 
@@ -70,17 +76,53 @@ def test_scale_from_neutral_backs_off_all_dimensions():
     assert q["brightness_db"] == 1.0
 
 
-def test_brightness_zero_is_exact_copy():
+def test_weight_tilt_zero_is_exact_copy():
     y, sr = voiced()
-    out = _apply_brightness_stft(y, sr, 0.0)
+    out = _apply_weight_tilt_stft(y, sr, 0.0)
     assert np.array_equal(out, y)
 
 
-def test_brightness_stft_preserves_length_and_finite():
+def test_weight_tilt_preserves_length_and_finite():
     y, sr = voiced()
-    out = _apply_brightness_stft(y, sr, 1.5)
+    out = _apply_weight_tilt_stft(y, sr, 1.5)
     assert len(out) == len(y)
     assert np.isfinite(out).all()
+
+
+def test_weight_tilt_is_anchored_to_hertz_not_nyquist():
+    """The same slider value must mean the same thing at every sample rate."""
+    freqs = np.array([250.0, 1000.0, 4000.0])
+    at_24k = _weight_tilt_gain(np.append(freqs, 12000.0), 2.0)[:3]
+    at_48k = _weight_tilt_gain(np.append(freqs, 24000.0), 2.0)[:3]
+    assert np.allclose(at_24k, at_48k)
+    # Full travel is spent inside the speech band, symmetric about the 1 kHz pivot.
+    assert at_48k[0] == pytest.approx(-2.0)
+    assert at_48k[1] == pytest.approx(0.0)
+    assert at_48k[2] == pytest.approx(2.0)
+
+
+def test_weight_tilt_moves_speech_band_energy_audibly():
+    """The old Nyquist-normalised tilt moved this by ~0.12 dB, far below a JND."""
+    y, sr = voiced()
+    before = _spectral_tilt_db(y, sr)
+    lighter = _spectral_tilt_db(_apply_weight_tilt_stft(y, sr, 2.0), sr)
+    heavier = _spectral_tilt_db(_apply_weight_tilt_stft(y, sr, -2.0), sr)
+    assert lighter - before > 1.0
+    assert before - heavier > 1.0
+
+
+def test_level_audit_band_matches_leveller_clamp():
+    """A gain the leveller itself chose must not be reported as an anomaly."""
+    assert LEVEL_GAIN_MIN < 1.0 < LEVEL_GAIN_MAX
+
+
+def test_output_pitch_bounds_follow_an_upward_shift():
+    floor, ceiling = 80.0, 300.0
+    up = _output_pitch_bounds(floor, ceiling, {"pitch_semitones": 6.0, "pitch_range_scale": 1.0})
+    assert up[1] > ceiling
+    assert up[0] > floor
+    flat = _output_pitch_bounds(floor, ceiling, {"pitch_semitones": 0.0, "pitch_range_scale": 1.0})
+    assert flat == pytest.approx((floor, ceiling))
 
 
 def test_adaptive_pitch_bounds_follow_speaker():
@@ -90,3 +132,22 @@ def test_adaptive_pitch_bounds_follow_speaker():
     assert 50 <= floor <= 120
     assert 300 <= ceiling <= 600
     assert floor < 180 < ceiling
+
+
+def test_backoff_prefers_the_requested_strength_when_quality_is_close():
+    """A weaker pass scores better on artifacts by construction; it must pay for that."""
+    y, sr = voiced()
+    _, meta = transform_audio(
+        y,
+        sr,
+        dict(
+            pitch_semitones=3.0,
+            resonance_scale=1.08,
+            pitch_range_scale=1.3,
+            brightness_db=2.0,
+            mode="natural",
+            artifact_protection=True,
+        ),
+    )
+    assert meta["artifact_backoff_strength"] == 1.0
+    assert meta["artifact_audit"]["spectral_tilt_change_db"] is not None

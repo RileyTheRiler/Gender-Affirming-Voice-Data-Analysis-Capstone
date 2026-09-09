@@ -19,6 +19,19 @@ app = FastAPI(title="Voice Target Lab API")
 MAX_SECONDS = 15.0
 ROOT = Path(__file__).resolve().parents[1]
 
+# Vocal-weight tilt: pivot frequency and how far from it the full amount is reached.
+WEIGHT_PIVOT_HZ = 1000.0
+WEIGHT_SPAN_OCTAVES = 2.0
+WEIGHT_BAND_HZ = (60.0, 8000.0)
+
+# Output level correction. The audit band must match the leveller clamp, otherwise
+# a gain the leveller itself chose gets reported as an anomaly.
+LEVEL_GAIN_MIN = 0.65
+LEVEL_GAIN_MAX = 1.50
+
+# How much quality a backoff pass must buy to justify weakening the transformation.
+BACKOFF_FIDELITY_WEIGHT = 25.0
+
 
 class TransformRequest(BaseModel):
     wav_base64: str = Field(min_length=16)
@@ -61,16 +74,19 @@ def _read_wav(payload: bytes) -> tuple[np.ndarray, int]:
 
 def _pitch_track(sound: parselmouth.Sound, floor: float, ceiling: float) -> dict[str, Any]:
     """Return robust descriptive pitch-track statistics without modifying audio."""
+    empty = {"median_hz": None, "voiced_fraction": 0.0, "p10_hz": None, "p90_hz": None, "jump_p95_st": None}
     try:
         pitch = sound.to_pitch(time_step=0.01, pitch_floor=float(floor), pitch_ceiling=float(ceiling))
         values = np.asarray(pitch.selected_array["frequency"], dtype=float)
     except Exception:
-        return {"median_hz": None, "voiced_fraction": 0.0, "p10_hz": None, "p90_hz": None, "jump_p95_st": None}
+        # The analyser itself failed. Report that separately so the audit does not
+        # blame the recording for what is really an analysis problem.
+        return {**empty, "analysis_failed": True}
 
     valid = np.isfinite(values) & (values > 0)
     voiced = values[valid]
     if voiced.size == 0:
-        return {"median_hz": None, "voiced_fraction": 0.0, "p10_hz": None, "p90_hz": None, "jump_p95_st": None}
+        return {**empty, "analysis_failed": False}
 
     jumps: list[float] = []
     if values.size > 1:
@@ -86,6 +102,7 @@ def _pitch_track(sound: parselmouth.Sound, floor: float, ceiling: float) -> dict
         "p10_hz": float(np.percentile(voiced, 10)),
         "p90_hz": float(np.percentile(voiced, 90)),
         "jump_p95_st": float(np.percentile(jumps, 95)) if jumps else 0.0,
+        "analysis_failed": False,
     }
 
 
@@ -143,7 +160,20 @@ def _scale_from_neutral(params: dict[str, float], strength: float) -> dict[str, 
     }
 
 
-def _apply_brightness_stft(audio: np.ndarray, sr: int, amount_db: float) -> np.ndarray:
+def _weight_tilt_gain(freqs: np.ndarray, amount_db: float) -> np.ndarray:
+    """Tilt in dB per frequency bin, symmetric in log frequency about the pivot.
+
+    Anchored to hertz rather than to Nyquist so the same slider value means the
+    same thing at every sample rate, and shaped over 250 Hz - 4 kHz so the whole
+    control travel lands inside the band that carries speech.
+    """
+    low, high = WEIGHT_BAND_HZ
+    banded = np.clip(np.asarray(freqs, dtype=float), low, min(high, max(freqs[-1], low + 1.0)))
+    octaves = np.log2(banded / WEIGHT_PIVOT_HZ) / WEIGHT_SPAN_OCTAVES
+    return float(amount_db) * np.clip(octaves, -1.0, 1.0)
+
+
+def _apply_weight_tilt_stft(audio: np.ndarray, sr: int, amount_db: float) -> np.ndarray:
     """Apply a smooth, time-local spectral tilt with overlap-add reconstruction."""
     if abs(amount_db) < 1e-6 or audio.size == 0:
         return audio.copy()
@@ -152,9 +182,7 @@ def _apply_brightness_stft(audio: np.ndarray, sr: int, amount_db: float) -> np.n
     hop = n_fft // 4
     window = np.sqrt(np.hanning(n_fft) + 1e-12)
     freqs = np.fft.rfftfreq(n_fft, 1.0 / sr)
-    norm_freq = np.clip(freqs / max(sr / 2.0, 1.0), 0.0, 1.0)
-    gain_db = float(amount_db) * (norm_freq - 0.5)
-    gain = np.power(10.0, gain_db / 20.0)
+    gain = np.power(10.0, _weight_tilt_gain(freqs, amount_db) / 20.0)
 
     pad = n_fft
     padded = np.pad(np.asarray(audio, dtype=float), (pad, pad))
@@ -181,7 +209,7 @@ def _safe_level(audio: np.ndarray, reference_rms: float) -> np.ndarray:
     out = np.asarray(audio, dtype=np.float64)
     rms = float(np.sqrt(np.mean(np.square(out)))) if out.size else 0.0
     if reference_rms > 1e-8 and rms > 1e-8:
-        out *= float(np.clip(reference_rms / rms, 0.65, 1.55))
+        out *= float(np.clip(reference_rms / rms, LEVEL_GAIN_MIN, LEVEL_GAIN_MAX))
     peak = float(np.max(np.abs(out))) if out.size else 0.0
     if peak > 0.96:
         out *= 0.96 / peak
@@ -200,6 +228,22 @@ def _encode_wav(audio: np.ndarray, sr: int) -> bytes:
     return buf.getvalue()
 
 
+def _output_pitch_bounds(floor: float, ceiling: float, params: dict[str, float]) -> tuple[float, float]:
+    """Follow the requested shift so an upward transform is not clipped by the source ceiling.
+
+    The band is moved with the pitch median and widened only by the intonation
+    scaling, keeping roughly the source's octave width so the tracker does not
+    gain room for octave errors.
+    """
+    ratio = 2.0 ** (float(params["pitch_semitones"]) / 12.0)
+    widen = math.sqrt(max(1.0, float(params["pitch_range_scale"])))
+    low = float(np.clip(floor * ratio / widen, 40.0, 250.0))
+    high = float(np.clip(ceiling * ratio * widen, 300.0, 800.0))
+    if high < low * 2.5:
+        high = min(800.0, low * 2.5)
+    return low, high
+
+
 def _run_praat_transform(audio: np.ndarray, sr: int, params: dict[str, float], floor: float, ceiling: float, old_median: float) -> np.ndarray:
     sound = parselmouth.Sound(audio, sampling_frequency=float(sr))
     new_median = old_median * (2.0 ** (params["pitch_semitones"] / 12.0))
@@ -216,7 +260,20 @@ def _run_praat_transform(audio: np.ndarray, sr: int, params: dict[str, float], f
     return out
 
 
-def _artifact_audit(source: np.ndarray, output: np.ndarray, source_pitch: dict[str, Any], output_pitch: dict[str, Any], requested_shift: float) -> dict[str, Any]:
+def _spectral_tilt_db(audio: np.ndarray, sr: int) -> float | None:
+    """Energy balance of 1-5 kHz against 50-1000 Hz, the usual "vocal weight" proxy."""
+    if audio.size < 512:
+        return None
+    spectrum = np.abs(np.fft.rfft(audio * np.hanning(audio.size))) ** 2
+    freqs = np.fft.rfftfreq(audio.size, 1.0 / sr)
+    low = spectrum[(freqs > 50.0) & (freqs < 1000.0)].sum()
+    high = spectrum[(freqs >= 1000.0) & (freqs < 5000.0)].sum()
+    if low <= 0.0 or high <= 0.0:
+        return None
+    return float(10.0 * np.log10(high / low))
+
+
+def _artifact_audit(source: np.ndarray, output: np.ndarray, sr: int, source_pitch: dict[str, Any], output_pitch: dict[str, Any], requested_shift: float) -> dict[str, Any]:
     flags: list[str] = []
     quality = 100.0
 
@@ -234,6 +291,9 @@ def _artifact_audit(source: np.ndarray, output: np.ndarray, source_pitch: dict[s
         if pitch_error > 0.75:
             flags.append("pitch target was not reproduced cleanly")
             quality -= min(28.0, 12.0 + pitch_error * 8.0)
+    elif output_pitch.get("analysis_failed") or source_pitch.get("analysis_failed"):
+        flags.append("pitch analysis could not run on this pass")
+        quality -= 30.0
     else:
         flags.append("output pitch tracking became unstable")
         quality -= 30.0
@@ -253,13 +313,19 @@ def _artifact_audit(source: np.ndarray, output: np.ndarray, source_pitch: dict[s
         flags.append("near-clipping samples detected")
         quality -= min(18.0, clip_fraction * 4000.0)
 
-    if not (0.60 <= rms_ratio <= 1.50):
+    if not (LEVEL_GAIN_MIN - 0.01 <= rms_ratio <= LEVEL_GAIN_MAX + 0.01):
         flags.append("output level changed unusually")
         quality -= 10.0
+
+    source_tilt = _spectral_tilt_db(source, sr)
+    output_tilt = _spectral_tilt_db(output, sr)
 
     return {
         "quality_score": round(float(np.clip(quality, 0.0, 100.0)), 1),
         "flags": flags,
+        "spectral_tilt_source_db": round(source_tilt, 2) if source_tilt is not None else None,
+        "spectral_tilt_output_db": round(output_tilt, 2) if output_tilt is not None else None,
+        "spectral_tilt_change_db": round(output_tilt - source_tilt, 2) if None not in (source_tilt, output_tilt) else None,
         "clip_fraction": round(clip_fraction, 6),
         "rms_ratio": round(rms_ratio, 3),
         "voiced_fraction_source": round(float(source_pitch.get("voiced_fraction", 0.0)), 3),
@@ -285,25 +351,31 @@ def transform_audio(audio: np.ndarray, sr: int, params: dict[str, Any]) -> tuple
         strengths = [1.0, 0.85, 0.70, 0.55]
 
     best: tuple[np.ndarray, dict[str, float], dict[str, Any], float] | None = None
+    best_score = -math.inf
     for strength in strengths:
         effective = _scale_from_neutral(bounded, strength)
         raw = _run_praat_transform(audio, sr, effective, floor, ceiling, old_median)
-        raw = _apply_brightness_stft(raw, sr, effective["brightness_db"])
+        raw = _apply_weight_tilt_stft(raw, sr, effective["brightness_db"])
         out = _safe_level(raw, reference_rms)
+        out_floor, out_ceiling = _output_pitch_bounds(floor, ceiling, effective)
         out_sound = parselmouth.Sound(out, sampling_frequency=float(sr))
-        out_pitch = _pitch_track(out_sound, floor, ceiling)
-        audit = _artifact_audit(audio, out, source_pitch, out_pitch, effective["pitch_semitones"])
+        out_pitch = _pitch_track(out_sound, out_floor, out_ceiling)
+        audit = _artifact_audit(audio, out, sr, source_pitch, out_pitch, effective["pitch_semitones"])
 
-        candidate = (out, effective, audit, strength)
-        if best is None or audit["quality_score"] > best[2]["quality_score"]:
-            best = candidate
+        # A weaker pass always scores better on artifacts simply because it changes
+        # less, so charge it for the distance it gives up from what was asked.
+        score = audit["quality_score"] - BACKOFF_FIDELITY_WEIGHT * (1.0 - strength)
+        if score > best_score:
+            best, best_score = (out, effective, audit, strength), score
         if not audit["flags"]:
-            best = candidate
+            best, best_score = (out, effective, audit, strength), math.inf
             break
 
-    assert best is not None
+    if best is None:
+        raise ValueError("The transformation produced no usable result.")
     out, effective, audit, applied_strength = best
-    output_pitch = _pitch_track(parselmouth.Sound(out, sampling_frequency=float(sr)), floor, ceiling)
+    out_floor, out_ceiling = _output_pitch_bounds(floor, ceiling, effective)
+    output_pitch = _pitch_track(parselmouth.Sound(out, sampling_frequency=float(sr)), out_floor, out_ceiling)
     observed_median = output_pitch["median_hz"]
     observed_shift = None
     if observed_median and old_median:
@@ -324,6 +396,8 @@ def transform_audio(audio: np.ndarray, sr: int, params: dict[str, Any]) -> tuple
         "pitch_analysis": {
             "floor_hz": round(floor, 1),
             "ceiling_hz": round(ceiling, 1),
+            "output_floor_hz": round(out_floor, 1),
+            "output_ceiling_hz": round(out_ceiling, 1),
             "source_voiced_fraction": round(float(source_pitch["voiced_fraction"]), 3),
         },
         "backend": "Praat/Parselmouth · Natural v2" if mode == "natural" else "Praat/Parselmouth · Explore",

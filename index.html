@@ -60,9 +60,9 @@
       </div>
 
       <div class="control">
-        <div class="control-title"><label for="brightness">Brightness <span class="experimental">experimental</span></label><output id="brightnessOut">+0.3 dB</output></div>
+        <div class="control-title"><label for="brightness">Vocal weight <span class="experimental">experimental</span></label><output id="brightnessOut">+0.3 dB</output></div>
         <input id="brightness" type="range" min="-2" max="2" step="0.1" value="0.25" />
-        <div id="brightnessBounds" class="minmax"><span>−2 dB</span><span>0 dB</span><span>+2 dB</span></div>
+        <div id="brightnessBounds" class="minmax"><span>−2 dB heavier</span><span>0 dB</span><span>+2 dB lighter</span></div>
       </div>
 
       <div class="preset-row">
@@ -93,7 +93,7 @@
         <div><dt>Pitch median</dt><dd>Moves the overall F0 contour up or down while keeping the utterance duration approximately fixed.</dd></div>
         <div><dt>Resonance</dt><dd>Uses Praat formant scaling. This is independent of the requested pitch shift.</dd></div>
         <div><dt>Intonation</dt><dd>Expands or compresses variation around the utterance's pitch median.</dd></div>
-        <div><dt>Brightness</dt><dd>An experimental spectral-tilt control. Treat it as exploratory, not as a clinical target.</dd></div>
+        <div><dt>Vocal weight</dt><dd>Tilts the balance between low (50–1000 Hz) and high (1–5 kHz) energy about a 1 kHz pivot, in log frequency, so the value means the same at any sample rate. Positive is lighter. Still exploratory, not a clinical target.</dd></div>
       </dl>
     </section>
   </main>

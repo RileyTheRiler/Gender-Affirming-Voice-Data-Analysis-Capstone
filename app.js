@@ -42,7 +42,7 @@ function applyMode(nextMode, { reset = false } = {}) {
     els.pitchBounds.innerHTML = '<span>−3 ST</span><span>original</span><span>+3 ST</span>';
     els.resonanceBounds.innerHTML = '<span>0.960×</span><span>1.000×</span><span>1.080×</span>';
     els.rangeBounds.innerHTML = '<span>0.80×</span><span>1.00×</span><span>1.30×</span>';
-    els.brightnessBounds.innerHTML = '<span>−2 dB</span><span>0 dB</span><span>+2 dB</span>';
+    els.brightnessBounds.innerHTML = '<span>−2 dB heavier</span><span>0 dB</span><span>+2 dB lighter</span>';
     if (reset) {
       els.pitch.value = 2.0; els.resonance.value = 1.045; els.range.value = 1.10; els.brightness.value = 0.25;
       els.artifactProtection.checked = true;
@@ -52,7 +52,7 @@ function applyMode(nextMode, { reset = false } = {}) {
     els.pitchBounds.innerHTML = '<span>−6 ST</span><span>original</span><span>+6 ST</span>';
     els.resonanceBounds.innerHTML = '<span>0.900×</span><span>1.000×</span><span>1.150×</span>';
     els.rangeBounds.innerHTML = '<span>0.50×</span><span>1.00×</span><span>1.80×</span>';
-    els.brightnessBounds.innerHTML = '<span>−6 dB</span><span>0 dB</span><span>+6 dB</span>';
+    els.brightnessBounds.innerHTML = '<span>−6 dB heavier</span><span>0 dB</span><span>+6 dB lighter</span>';
   }
   refreshLabels();
 }
@@ -210,6 +210,7 @@ els.generateBtn.addEventListener('click', async () => {
       metricCard(`${m.baseline_pitch_median_hz ?? '—'} Hz`, 'baseline median F0'),
       metricCard(`${m.output_pitch_median_hz ?? '—'} Hz`, 'modified median F0'),
       metricCard(m.observed_pitch_shift_semitones != null ? `${fmtSigned(m.observed_pitch_shift_semitones, 2)} ST` : '—', 'observed pitch shift'),
+      metricCard(audit.spectral_tilt_change_db != null ? `${fmtSigned(audit.spectral_tilt_change_db, 2)} dB` : '—', 'vocal-weight tilt change'),
       metricCard(quality, 'signal-quality screen'),
       metricCard(backoff, 'automatic backoff'),
       metricCard(m.backend || 'Praat', 'processing backend')
