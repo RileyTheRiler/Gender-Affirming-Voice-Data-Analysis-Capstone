@@ -166,12 +166,20 @@ round. Before it could become the default:
 2. Fix the analysis cost by caching the WORLD decomposition across backoff passes (§5).
 3. A better independence measurement, or drop the claim (§4).
 4. ~~Decide whether `pyworld` can be built in the deployment environment~~ —
-   **settled, with a catch.** It builds from sdist on a clean Ubuntu runner with
-   Python 3.12 in about 17 s. But pyworld 0.3.5 calls
-   `pkg_resources.get_distribution()` at import time, and Python 3.12 no longer ships
-   setuptools, so it installs cleanly and then fails to import. `setuptools` is
-   therefore a runtime dependency of the `world` extra, not just a build one. Expect
-   the same on any Python 3.12+ deployment target.
+   **settled, and it is the strongest argument against adopting pyworld as it
+   stands.** It builds from sdist on a clean Ubuntu runner with Python 3.12 in about
+   17 s, so the toolchain is not the problem. The import is: pyworld 0.3.5 calls
+   `pkg_resources.get_distribution()` at import time, and `pkg_resources` is gone
+   twice over — Python 3.12 no longer ships setuptools at all, and setuptools itself
+   removed `pkg_resources` in 82.0.0 (present through 81.0.0). Both times pyworld
+   compiles and installs cleanly and is then unimportable, which fails far more
+   confusingly than a build error.
+
+   The `world` extra therefore carries `setuptools>=68,<82` as a *runtime*
+   dependency. That pin holds an unrelated build tool back for the sake of one
+   import line in an unmaintained package, and it will age badly. Before adopting
+   WORLD permanently, prefer a maintained fork or vendoring the two WORLD entry
+   points over carrying this pin.
 
 ## Using it
 
